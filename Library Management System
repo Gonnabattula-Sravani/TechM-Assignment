@@ -1,0 +1,253 @@
+problem-4
+
+
+
+
+=> setUp  ( application.properties )
+spring.datasource.url=jdbc:h2:mem:librarydb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+spring.jpa.hibernate.ddl-auto=update
+spring.h2.console.enabled=true
+spring.jpa.show-sql=true
+
+
+
+=> Entities ( Book.java )
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Book {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long bookId;
+    private String title;
+    private String author;
+    private String category;
+    private boolean availability;
+}
+
+
+
+=>User.java
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class User {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long userId;
+    private String name;
+    private String membershipType;
+}
+
+
+=>Transaction.java
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Transaction {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long transactionId;
+
+    private Long bookId;
+    private Long userId;
+
+    private LocalDate issueDate;
+    private LocalDate returnDate;
+
+    private String status; // ISSUED, RETURNED, OVERDUE
+}
+
+
+=> Repositories
+public interface BookRepository extends JpaRepository<Book, Long> {
+    List<Book> findByTitleContainingIgnoreCase(String title);
+    List<Book> findByAuthorContainingIgnoreCase(String author);
+    List<Book> findByCategoryContainingIgnoreCase(String category);
+}
+
+public interface UserRepository extends JpaRepository<User, Long> {}
+
+public interface TransactionRepository extends JpaRepository<Transaction, Long> {
+    List<Transaction> findByUserId(Long userId);
+    List<Transaction> findByStatus(String status);
+}
+
+
+
+=> Services  ( LibraryService.java )
+@Service
+public class LibraryService {
+    @Autowired
+    private BookRepository bookRepo;
+
+    @Autowired
+    private UserRepository userRepo;
+
+    @Autowired
+    private TransactionRepository transactionRepo;
+
+    public Book addBook(Book book) {
+        book.setAvailability(true);
+        return bookRepo.save(book);
+    }
+
+    public void deleteBook(Long id) {
+        bookRepo.deleteById(id);
+    }
+
+    public User addUser(User user) {
+        return userRepo.save(user);
+    }
+
+    public void deleteUser(Long id) {
+        userRepo.deleteById(id);
+    }
+
+    public Transaction lendBook(Long bookId, Long userId) {
+        Book book = bookRepo.findById(bookId).orElseThrow();
+        if (!book.isAvailability()) throw new RuntimeException("Book not available");
+
+        book.setAvailability(false);
+        bookRepo.save(book);
+
+        Transaction txn = new Transaction(null, bookId, userId, LocalDate.now(), null, "ISSUED");
+        return transactionRepo.save(txn);
+    }
+
+    public Transaction returnBook(Long txnId) {
+        Transaction txn = transactionRepo.findById(txnId).orElseThrow();
+        Book book = bookRepo.findById(txn.getBookId()).orElseThrow();
+
+        book.setAvailability(true);
+        bookRepo.save(book);
+
+        txn.setReturnDate(LocalDate.now());
+        txn.setStatus("RETURNED");
+        return transactionRepo.save(txn);
+    }
+
+    public List<Transaction> overdueBooks() {
+        return transactionRepo.findByStatus("ISSUED").stream()
+                .filter(txn -> txn.getIssueDate().plusDays(14).isBefore(LocalDate.now()))
+                .peek(txn -> txn.setStatus("OVERDUE"))
+                .toList();
+    }
+
+    public List<Transaction> getUserHistory(Long userId) {
+        return transactionRepo.findByUserId(userId);
+    }
+
+    public List<Book> searchBooks(String title, String author, String category) {
+        if (!title.isBlank()) return bookRepo.findByTitleContainingIgnoreCase(title);
+        if (!author.isBlank()) return bookRepo.findByAuthorContainingIgnoreCase(author);
+        if (!category.isBlank()) return bookRepo.findByCategoryContainingIgnoreCase(category);
+        return bookRepo.findAll();
+    }
+}
+
+
+=> Controllers  ( LibraryController.java )
+@RestController
+@RequestMapping("/api/library")
+public class LibraryController {
+    @Autowired
+    private LibraryService service;
+
+    @PostMapping("/book")
+    public Book addBook(@RequestBody Book book) {
+        return service.addBook(book);
+    }
+
+    @DeleteMapping("/book/{id}")
+    public void deleteBook(@PathVariable Long id) {
+        service.deleteBook(id);
+    }
+
+    @PostMapping("/user")
+    public User addUser(@RequestBody User user) {
+        return service.addUser(user);
+    }
+
+    @DeleteMapping("/user/{id}")
+    public void deleteUser(@PathVariable Long id) {
+        service.deleteUser(id);
+    }
+
+    @PostMapping("/lend")
+    public Transaction lend(@RequestParam Long bookId, @RequestParam Long userId) {
+        return service.lendBook(bookId, userId);
+    }
+
+    @PostMapping("/return")
+    public Transaction returnBook(@RequestParam Long transactionId) {
+        return service.returnBook(transactionId);
+    }
+
+    @GetMapping("/overdue")
+    public List<Transaction> overdueBooks() {
+        return service.overdueBooks();
+    }
+
+    @GetMapping("/history/{userId}")
+    public List<Transaction> userHistory(@PathVariable Long userId) {
+        return service.getUserHistory(userId);
+    }
+
+    @GetMapping("/search")
+    public List<Book> search(@RequestParam(defaultValue = "") String title,
+                             @RequestParam(defaultValue = "") String author,
+                             @RequestParam(defaultValue = "") String category) {
+        return service.searchBooks(title, author, category);
+    }
+}
+
+
+
+=>Security Configuration ( SecurityConfig.java )
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    @Bean
+    public PasswordEncoder encoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public UserDetailsService userDetailsService() {
+        UserDetails librarian = User.withUsername("librarian")
+                .password(encoder().encode("lib123"))
+                .roles("LIBRARIAN")
+                .build();
+        return new InMemoryUserDetailsManager(librarian);
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http.csrf().disable()
+            .authorizeHttpRequests()
+            .anyRequest().authenticated()
+            .and()
+            .httpBasic();
+        return http.build();
+    }
+}
+
+
+endpoints :
+
+POST /api/library/book
+
+POST /api/library/lend?bookId=1&userId=1
+
+POST /api/library/return?transactionId=1
+
+GET /api/library/search?title=Java
+
+Using Basic Auth with username: librarian, password: lib123
