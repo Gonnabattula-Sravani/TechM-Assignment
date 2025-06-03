@@ -1,0 +1,232 @@
+problem-3
+
+
+
+=>  Setup (  Configuration )
+----> application.properties
+
+spring.datasource.url=jdbc:h2:mem:studentdb
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
+spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+spring.h2.console.enabled=true
+spring.jpa.show-sql=true
+spring.jpa.hibernate.ddl-auto=update
+
+=> Model ( Student.java )
+@Entity
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class Student {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long studentId;
+
+    @NotBlank(message = "Name is required")
+    private String name;
+
+    @Min(value = 5, message = "Age must be at least 5")
+    @Max(value = 100, message = "Age must be less than 100")
+    private int age;
+
+    @NotBlank(message = "Class is required")
+    private String studentClass;
+
+    @Email(message = "Enter a valid email")
+    private String email;
+
+    @NotBlank(message = "Address is required")
+    private String address;
+}
+
+
+
+=> Repository  (  StudentRepository.java )
+public interface StudentRepository extends JpaRepository<Student, Long> {
+    Page<Student> findByNameContainingIgnoreCase(String name, Pageable pageable);
+    Page<Student> findByStudentClass(String studentClass, Pageable pageable);
+}
+
+
+=>Service (  StudentService.java )
+@Service
+public class StudentService {
+    @Autowired
+    private StudentRepository repo;
+
+    public Page<Student> listAll(Pageable pageable) {
+        return repo.findAll(pageable);
+    }
+
+    public Student get(Long id) {
+        return repo.findById(id).orElseThrow(() -> new RuntimeException("Student not found"));
+    }
+
+    public void save(Student student) {
+        repo.save(student);
+    }
+
+    public void delete(Long id) {
+        repo.deleteById(id);
+    }
+
+    public Page<Student> searchByName(String name, Pageable pageable) {
+        return repo.findByNameContainingIgnoreCase(name, pageable);
+    }
+
+    public Page<Student> filterByClass(String studentClass, Pageable pageable) {
+        return repo.findByStudentClass(studentClass, pageable);
+    }
+}
+
+
+=> Controller (  StudentController.java )
+@Controller
+@RequestMapping("/students")
+public class StudentController {
+    @Autowired
+    private StudentService service;
+
+    @GetMapping
+    public String viewStudents(Model model,
+                               @RequestParam(defaultValue = "") String name,
+                               @RequestParam(defaultValue = "") String studentClass,
+                               @RequestParam(defaultValue = "0") int page) {
+        Pageable pageable = PageRequest.of(page, 5);
+        Page<Student> result;
+
+        if (!name.isEmpty()) {
+            result = service.searchByName(name, pageable);
+        } else if (!studentClass.isEmpty()) {
+            result = service.filterByClass(studentClass, pageable);
+        } else {
+            result = service.listAll(pageable);
+        }
+
+        model.addAttribute("students", result.getContent());
+        model.addAttribute("totalPages", result.getTotalPages());
+        model.addAttribute("currentPage", page);
+        return "student_list";
+    }
+
+    @GetMapping("/new")
+    public String showForm(Model model) {
+        model.addAttribute("student", new Student());
+        return "student_form";
+    }
+
+    @PostMapping("/save")
+    public String save(@Valid @ModelAttribute("student") Student student, BindingResult result) {
+        if (result.hasErrors()) return "student_form";
+        service.save(student);
+        return "redirect:/students";
+    }
+
+    @GetMapping("/edit/{id}")
+    public String edit(@PathVariable Long id, Model model) {
+        model.addAttribute("student", service.get(id));
+        return "student_form";
+    }
+
+    @GetMapping("/delete/{id}")
+    public String delete(@PathVariable Long id) {
+        service.delete(id);
+        return "redirect:/students";
+    }
+}
+
+
+
+=> Thymeleaf Templates  (  templates/student_list.html  )
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head><title>Students</title></head>
+<body>
+<h1>Student List</h1>
+
+<form method="get" th:action="@{/students}">
+    <input type="text" name="name" placeholder="Search by name">
+    <input type="text" name="studentClass" placeholder="Filter by class">
+    <button type="submit">Search</button>
+</form>
+
+<a th:href="@{/students/new}">Add Student</a>
+
+<table border="1">
+    <tr><th>ID</th><th>Name</th><th>Age</th><th>Class</th><th>Email</th><th>Address</th><th>Actions</th></tr>
+    <tr th:each="student : ${students}">
+        <td th:text="${student.studentId}"></td>
+        <td th:text="${student.name}"></td>
+        <td th:text="${student.age}"></td>
+        <td th:text="${student.studentClass}"></td>
+        <td th:text="${student.email}"></td>
+        <td th:text="${student.address}"></td>
+        <td>
+            <a th:href="@{'/students/edit/' + ${student.studentId}}">Edit</a> |
+            <a th:href="@{'/students/delete/' + ${student.studentId}}">Delete</a>
+        </td>
+    </tr>
+</table>
+
+<div>
+    <span th:each="i : ${#numbers.sequence(0, totalPages-1)}">
+        <a th:href="@{'/students?page=' + ${i}}" th:text="${i+1}"></a>
+    </span>
+</div>
+</body>
+</html>
+
+
+=>templates/student_form.html
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head><title>Student Form</title></head>
+<body>
+<h1 th:text="${student.studentId == null ? 'Add Student' : 'Edit Student'}"></h1>
+
+<form th:action="@{/students/save}" th:object="${student}" method="post">
+    <input type="hidden" th:field="*{studentId}"/>
+    Name: <input type="text" th:field="*{name}"/> <br/>
+    Age: <input type="number" th:field="*{age}"/> <br/>
+    Class: <input type="text" th:field="*{studentClass}"/> <br/>
+    Email: <input type="email" th:field="*{email}"/> <br/>
+    Address: <input type="text" th:field="*{address}"/> <br/>
+    <button type="submit">Save</button>
+</form>
+
+<div th:if="${#fields.hasErrors()}">
+    <ul>
+        <li th:each="err : ${#fields.errors('*')}" th:text="${err}"></li>
+    </ul>
+</div>
+
+<a th:href="@{/students}">Back to List</a>
+</body>
+</html>
+
+
+=>Global Error Handling ( ErrorController.java )
+
+@ControllerAdvice
+public class GlobalExceptionHandler {
+    @ExceptionHandler(Exception.class)
+    public String handleError(Exception ex, Model model) {
+        model.addAttribute("message", ex.getMessage());
+        return "error";
+    }
+}
+
+
+
+=> templates/error.html
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head><title>Error</title></head>
+<body>
+<h1>Error</h1>
+<p th:text="${message}"></p>
+<a th:href="@{/students}">Back to List</a>
+</body>
+</html>
