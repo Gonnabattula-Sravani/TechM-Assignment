@@ -1,0 +1,164 @@
+problem-1
+
+
+
+
+// 1. Entities and Relationships
+
+// => Employee.java
+@Entity
+public class Employee {
+    @Id
+    private Long employeeId;
+
+    private String name;
+    private String department;
+    private String designation;
+
+    private String email;
+    private String password; // Hashed
+    private String role; // EMPLOYEE or MANAGER
+}
+
+// => Attendance.java
+@Entity
+public class Attendance {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long attendanceId;
+
+    private Long employeeId;
+    private LocalDate date;
+
+    @Enumerated(EnumType.STRING)
+    private Status status;
+
+    public enum Status {
+        PRESENT, ABSENT
+    }
+}
+
+// 2. Repositories
+
+public interface EmployeeRepository extends JpaRepository<Employee, Long> {
+    Optional<Employee> findByEmail(String email);
+}
+
+public interface AttendanceRepository extends JpaRepository<Attendance, Long> {
+    List<Attendance> findByEmployeeId(Long employeeId);
+    List<Attendance> findByDate(LocalDate date);
+}
+
+// 3. Security Configuration
+
+// => CustomUserDetailsService.java
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+    @Autowired
+    private EmployeeRepository repo;
+
+    @Override
+    public UserDetails loadUserByUsername(String email) {
+        Employee emp = repo.findByEmail(email).orElseThrow();
+        return User.withUsername(emp.getEmail())
+                .password(emp.getPassword())
+                .roles(emp.getRole())
+                .build();
+    }
+}
+
+// => SecurityConfig.java
+@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+    @Autowired
+    private CustomUserDetailsService userDetailsService;
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf().disable()
+            .authorizeHttpRequests()
+                .requestMatchers("/api/attendance/mark").hasRole("EMPLOYEE")
+                .requestMatchers("/api/attendance/report/").hasRole("MANAGER")
+                .anyRequest().authenticated()
+            .and()
+            .httpBasic()
+            .and()
+            .userDetailsService(userDetailsService)
+            .build();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+
+// 4. REST API Endpoints
+
+// => AttendanceController.java
+@RestController
+@RequestMapping("/api/attendance")
+public class AttendanceController {
+
+    @Autowired
+    private AttendanceRepository attendanceRepo;
+
+    @Autowired
+    private EmployeeRepository employeeRepo;
+
+    @PostMapping("/mark")
+    public ResponseEntity<?> markAttendance(@RequestParam Long employeeId, @RequestParam Status status) {
+        Attendance a = new Attendance();
+        a.setEmployeeId(employeeId);
+        a.setDate(LocalDate.now());
+        a.setStatus(status);
+        attendanceRepo.save(a);
+        return ResponseEntity.ok("Attendance marked");
+    }
+
+    @GetMapping("/report/{employeeId}")
+    public List<Attendance> getEmployeeReport(@PathVariable Long employeeId) {
+        return attendanceRepo.findByEmployeeId(employeeId);
+    }
+
+    @GetMapping("/report/department/{department}")
+    public Map<Long, List<Attendance>> getDepartmentReport(@PathVariable String department) {
+        List<Employee> employees = employeeRepo.findAll()
+            .stream().filter(e -> e.getDepartment().equalsIgnoreCase(department))
+            .toList();
+
+        Map<Long, List<Attendance>> result = new HashMap<>();
+        for (Employee emp : employees) {
+            result.put(emp.getEmployeeId(), attendanceRepo.findByEmployeeId(emp.getEmployeeId()));
+        }
+        return result;
+    }
+}
+
+// 5. PostgreSQL Configuration (in application.properties)
+
+spring.datasource.url=jdbc:postgresql://localhost:5432/attendance_db
+spring.datasource.username=your_user
+spring.datasource.password=your_password
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+
+// 6. Data Initialization
+
+@Bean
+CommandLineRunner init(EmployeeRepository repo, PasswordEncoder encoder) {
+    return args -> {
+        repo.save(new Employee(1L, "Ravi Kumar", "IT", "Software Engineer", "ravi@example.com", encoder.encode("pass123"), "EMPLOYEE"));
+        repo.save(new Employee(2L, "Meera Sharma", "IT", "Team Lead", "meera@example.com", encoder.encode("pass123"), "MANAGER"));
+    };
+}
+
+// 7. Sample curl commands
+
+// => Mark Attendance (as EMPLOYEE)
+curl -u ravi@example.com:pass123 -X POST "http://localhost:8080/api/attendance/mark?employeeId=1&status=PRESENT"
+
+// => View Report (as MANAGER)
+curl -u meera@example.com:pass123 "http://localhost:8080/api/attendance/report/1"
