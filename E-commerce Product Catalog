@@ -1,253 +1,190 @@
-problem-4
 
 
+=> Setup (Configure pom.xml)
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>mysql</groupId>
+        <artifactId>mysql-connector-java</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.projectlombok</groupId>
+        <artifactId>lombok</artifactId>
+    </dependency>
+</dependencies>
 
 
-=> setUp  ( application.properties )
-spring.datasource.url=jdbc:h2:mem:librarydb
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=
+=>application.properties
+spring.datasource.url=jdbc:mysql://localhost:3306/ecommerce
+spring.datasource.username=root
+spring.datasource.password=yourpassword
 spring.jpa.hibernate.ddl-auto=update
-spring.h2.console.enabled=true
 spring.jpa.show-sql=true
 
 
-
-=> Entities ( Book.java )
+=>Product.java
 @Entity
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class Book {
+public class Product {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long bookId;
-    private String title;
-    private String author;
-    private String category;
-    private boolean availability;
-}
+    private Long productId;
 
-
-
-=>User.java
-@Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class User {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long userId;
     private String name;
-    private String membershipType;
-}
-
-
-=>Transaction.java
-@Entity
-@Data
-@NoArgsConstructor
-@AllArgsConstructor
-public class Transaction {
-    @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long transactionId;
-
-    private Long bookId;
-    private Long userId;
-
-    private LocalDate issueDate;
-    private LocalDate returnDate;
-
-    private String status; // ISSUED, RETURNED, OVERDUE
-}
-
-
-=> Repositories
-public interface BookRepository extends JpaRepository<Book, Long> {
-    List<Book> findByTitleContainingIgnoreCase(String title);
-    List<Book> findByAuthorContainingIgnoreCase(String author);
-    List<Book> findByCategoryContainingIgnoreCase(String category);
-}
-
-public interface UserRepository extends JpaRepository<User, Long> {}
-
-public interface TransactionRepository extends JpaRepository<Transaction, Long> {
-    List<Transaction> findByUserId(Long userId);
-    List<Transaction> findByStatus(String status);
+    private String description;
+    private double price;
+    private String category;
+    private int stockQuantity;
 }
 
 
 
-=> Services  ( LibraryService.java )
+=>ProductRepository.java
+public interface ProductRepository extends JpaRepository<Product, Long> {
+    List<Product> findByCategory(String category);
+    List<Product> findByPriceBetween(double min, double max);
+    List<Product> findByNameContainingIgnoreCase(String name);
+}
+
+
+
+=>ProductService.java
 @Service
-public class LibraryService {
+public class ProductService {
     @Autowired
-    private BookRepository bookRepo;
+    private ProductRepository productRepo;
 
-    @Autowired
-    private UserRepository userRepo;
-
-    @Autowired
-    private TransactionRepository transactionRepo;
-
-    public Book addBook(Book book) {
-        book.setAvailability(true);
-        return bookRepo.save(book);
+    public Product addProduct(Product product) {
+        return productRepo.save(product);
     }
 
-    public void deleteBook(Long id) {
-        bookRepo.deleteById(id);
+    public Product updateProduct(Long id, Product product) {
+        Product existing = productRepo.findById(id).orElseThrow(() -> new RuntimeException("Product not found"));
+        existing.setName(product.getName());
+        existing.setDescription(product.getDescription());
+        existing.setPrice(product.getPrice());
+        existing.setCategory(product.getCategory());
+        existing.setStockQuantity(product.getStockQuantity());
+        return productRepo.save(existing);
     }
 
-    public User addUser(User user) {
-        return userRepo.save(user);
+    public void deleteProduct(Long id) {
+        productRepo.deleteById(id);
     }
 
-    public void deleteUser(Long id) {
-        userRepo.deleteById(id);
+    public List<Product> getAllProducts() {
+        return productRepo.findAll();
     }
 
-    public Transaction lendBook(Long bookId, Long userId) {
-        Book book = bookRepo.findById(bookId).orElseThrow();
-        if (!book.isAvailability()) throw new RuntimeException("Book not available");
-
-        book.setAvailability(false);
-        bookRepo.save(book);
-
-        Transaction txn = new Transaction(null, bookId, userId, LocalDate.now(), null, "ISSUED");
-        return transactionRepo.save(txn);
+    public List<Product> getByCategory(String category) {
+        return productRepo.findByCategory(category);
     }
 
-    public Transaction returnBook(Long txnId) {
-        Transaction txn = transactionRepo.findById(txnId).orElseThrow();
-        Book book = bookRepo.findById(txn.getBookId()).orElseThrow();
-
-        book.setAvailability(true);
-        bookRepo.save(book);
-
-        txn.setReturnDate(LocalDate.now());
-        txn.setStatus("RETURNED");
-        return transactionRepo.save(txn);
+    public List<Product> getByPriceRange(double min, double max) {
+        return productRepo.findByPriceBetween(min, max);
     }
 
-    public List<Transaction> overdueBooks() {
-        return transactionRepo.findByStatus("ISSUED").stream()
-                .filter(txn -> txn.getIssueDate().plusDays(14).isBefore(LocalDate.now()))
-                .peek(txn -> txn.setStatus("OVERDUE"))
-                .toList();
-    }
-
-    public List<Transaction> getUserHistory(Long userId) {
-        return transactionRepo.findByUserId(userId);
-    }
-
-    public List<Book> searchBooks(String title, String author, String category) {
-        if (!title.isBlank()) return bookRepo.findByTitleContainingIgnoreCase(title);
-        if (!author.isBlank()) return bookRepo.findByAuthorContainingIgnoreCase(author);
-        if (!category.isBlank()) return bookRepo.findByCategoryContainingIgnoreCase(category);
-        return bookRepo.findAll();
+    public List<Product> searchByName(String name) {
+        return productRepo.findByNameContainingIgnoreCase(name);
     }
 }
 
 
-=> Controllers  ( LibraryController.java )
+
+=>ProductController.java
 @RestController
-@RequestMapping("/api/library")
-public class LibraryController {
+@RequestMapping("/api/products")
+public class ProductController {
     @Autowired
-    private LibraryService service;
+    private ProductService service;
 
-    @PostMapping("/book")
-    public Book addBook(@RequestBody Book book) {
-        return service.addBook(book);
+    @PostMapping
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Product> add(@RequestBody Product product) {
+        return new ResponseEntity<>(service.addProduct(product), HttpStatus.CREATED);
     }
 
-    @DeleteMapping("/book/{id}")
-    public void deleteBook(@PathVariable Long id) {
-        service.deleteBook(id);
+    @PutMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Product> update(@PathVariable Long id, @RequestBody Product product) {
+        return ResponseEntity.ok(service.updateProduct(id, product));
     }
 
-    @PostMapping("/user")
-    public User addUser(@RequestBody User user) {
-        return service.addUser(user);
+    @DeleteMapping("/{id}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<?> delete(@PathVariable Long id) {
+        service.deleteProduct(id);
+        return ResponseEntity.ok().build();
     }
 
-    @DeleteMapping("/user/{id}")
-    public void deleteUser(@PathVariable Long id) {
-        service.deleteUser(id);
-    }
-
-    @PostMapping("/lend")
-    public Transaction lend(@RequestParam Long bookId, @RequestParam Long userId) {
-        return service.lendBook(bookId, userId);
-    }
-
-    @PostMapping("/return")
-    public Transaction returnBook(@RequestParam Long transactionId) {
-        return service.returnBook(transactionId);
-    }
-
-    @GetMapping("/overdue")
-    public List<Transaction> overdueBooks() {
-        return service.overdueBooks();
-    }
-
-    @GetMapping("/history/{userId}")
-    public List<Transaction> userHistory(@PathVariable Long userId) {
-        return service.getUserHistory(userId);
+    @GetMapping
+    public List<Product> getAll() {
+        return service.getAllProducts();
     }
 
     @GetMapping("/search")
-    public List<Book> search(@RequestParam(defaultValue = "") String title,
-                             @RequestParam(defaultValue = "") String author,
-                             @RequestParam(defaultValue = "") String category) {
-        return service.searchBooks(title, author, category);
+    public List<Product> search(@RequestParam String name) {
+        return service.searchByName(name);
+    }
+
+    @GetMapping("/category")
+    public List<Product> filterByCategory(@RequestParam String category) {
+        return service.getByCategory(category);
+    }
+
+    @GetMapping("/price")
+    public List<Product> filterByPrice(@RequestParam double min, @RequestParam double max) {
+        return service.getByPriceRange(min, max);
     }
 }
 
 
 
-=>Security Configuration ( SecurityConfig.java )
+=>SecurityConfig.java
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
     @Bean
-    public PasswordEncoder encoder() {
+    public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
     @Bean
     public UserDetailsService userDetailsService() {
-        UserDetails librarian = User.withUsername("librarian")
-                .password(encoder().encode("lib123"))
-                .roles("LIBRARIAN")
+        UserDetails admin = User.withUsername("admin")
+                .password(passwordEncoder().encode("adminpass"))
+                .roles("ADMIN")
                 .build();
-        return new InMemoryUserDetailsManager(librarian);
+        UserDetails user = User.withUsername("user")
+                .password(passwordEncoder().encode("userpass"))
+                .roles("USER")
+                .build();
+        return new InMemoryUserDetailsManager(admin, user);
     }
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http.csrf().disable()
             .authorizeHttpRequests()
-            .anyRequest().authenticated()
+                .antMatchers(HttpMethod.POST, "/api/products/").hasRole("ADMIN")
+                .antMatchers(HttpMethod.PUT, "/api/products/").hasRole("ADMIN")
+                .antMatchers(HttpMethod.DELETE, "/api/products/").hasRole("ADMIN")
+                .anyRequest().permitAll()
             .and()
             .httpBasic();
         return http.build();
     }
 }
-
-
-endpoints :
-
-POST /api/library/book
-
-POST /api/library/lend?bookId=1&userId=1
-
-POST /api/library/return?transactionId=1
-
-GET /api/library/search?title=Java
-
-Using Basic Auth with username: librarian, password: lib123
